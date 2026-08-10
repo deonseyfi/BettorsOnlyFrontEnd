@@ -23,6 +23,8 @@ const fmtUnits = n => {
 // LeaderboardEntry → UI capper row
 export function adaptLeaderboardEntry(e) {
   const name = e.display_name || e.username || 'Capper';
+  const unitsProfit = Number(e.units_profit_30d ?? 0);
+  const streakRaw = e.current_streak ?? 0;
   return {
     id: e.capper_id,
     user: name,
@@ -32,8 +34,11 @@ export function adaptLeaderboardEntry(e) {
     roi: Math.round((e.roi_30d ?? 0) * 100) / 100,
     picks: e.total_picks ?? 0,
     sport: 'All',
-    streak: (e.current_streak ?? 0) >= 0 ? `${e.current_streak}W` : `${Math.abs(e.current_streak)}L`,
-    profit: fmtUnits(e.units_profit_30d),
+    streak: streakRaw >= 0 ? `${streakRaw}W` : `${Math.abs(streakRaw)}L`,
+    // Raw numeric versions kept alongside display strings for sorting.
+    streakRaw,
+    profit: fmtUnits(unitsProfit),
+    profitRaw: unitsProfit,
     price: 0,
     subPrice: Math.round((e.monthly_price_cents ?? 0) / 100),
     followers: '—',
