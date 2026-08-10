@@ -7,8 +7,7 @@ const links = [
   { id: 'picks', label: 'Picks' },
   { id: 'parlay', label: 'Parlay Calculator', stack: true },
   { id: 'leaderboard', label: 'Leaderboard' },
-  { id: 'profile', label: 'Profile' },
-  { id: 'inbox', label: 'Inbox' }
+  { id: 'profile', label: 'Profile' }
 ];
 
 export default function Nav({ currentPage, onNavigate, onOpenModal }) {
@@ -89,7 +88,6 @@ function UserMenu({ user, onSignOut, onNavigate }) {
           padding: 6
         }}>
           <MenuItem onClick={() => { setOpen(false); onNavigate('profile'); }}>Profile</MenuItem>
-          <MenuItem onClick={() => { setOpen(false); onNavigate('inbox'); }}>Inbox</MenuItem>
           <div style={{ height: 1, background: 'var(--border)', margin: '4px 0' }} />
           <MenuItem onClick={() => { setOpen(false); onSignOut(); }}>Log out</MenuItem>
         </div>

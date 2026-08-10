@@ -11,7 +11,6 @@ import Parlay from './pages/Parlay.jsx';
 import Profile from './pages/Profile.jsx';
 import Leaderboard from './pages/Leaderboard.jsx';
 import Capper from './pages/Capper.jsx';
-import Inbox from './pages/Inbox.jsx';
 import RoiGuide from './pages/RoiGuide.jsx';
 import Terms from './pages/Terms.jsx';
 import Privacy from './pages/Privacy.jsx';
@@ -39,7 +38,6 @@ export default function App() {
       case 'profile':     return <Profile onOpenModal={openModal} />;
       case 'leaderboard': return <Leaderboard onNavigate={navigate} />;
       case 'capper':      return <Capper capperId={pageParam} onOpenModal={openModal} />;
-      case 'inbox':       return <Inbox />;
       case 'roi':         return <RoiGuide onOpenModal={openModal} />;
       case 'terms':       return <Terms />;
       case 'privacy':     return <Privacy />;
