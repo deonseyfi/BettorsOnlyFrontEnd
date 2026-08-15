@@ -78,6 +78,9 @@ export const api = {
   becomeCapper: body => request('/cappers/become', { method: 'POST', auth: true, body }),
   updateMyCapper: body => request('/cappers/me', { method: 'PATCH', auth: true, body }),
   createPick: body => request('/picks', { method: 'POST', auth: true, body }),
+  // Only send the fields that actually changed — the API rejects an empty patch,
+  // and once a game has started it rejects any wager field at all.
+  updatePick: (id, body) => request(`/picks/${id}`, { method: 'PATCH', auth: true, body }),
   listMySubscriptions: () => request('/subscriptions', { auth: true }),
   createSubscription: capperId => request('/subscriptions', { method: 'POST', auth: true, body: { capperId } }),
   cancelSubscription: id => request(`/subscriptions/${id}`, { method: 'DELETE', auth: true }),

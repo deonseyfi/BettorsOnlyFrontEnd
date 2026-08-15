@@ -191,7 +191,9 @@ function TierProgress({ capper, tier }) {
 }
 
 function HistoryTab() {
-  const { data, loading, error } = useApi(() => api.getMyCapperPicks({ limit: 50 }), []);
+  const { data, loading, error, refetch } = useApi(() => api.getMyCapperPicks({ limit: 50 }), []);
+  const [editingId, setEditingId] = useState(null);
+
   if (loading) return <Loading />;
   if (error) return <ErrorBox error={error} />;
   const picks = data || [];
@@ -201,14 +203,41 @@ function HistoryTab() {
   return (
     <div className="p-content active">
       <div className="pick-history">
-        {picks.map(p => <PickHistoryRow key={p.id} pick={p} />)}
+        {picks.map(p => (
+          editingId === p.id
+            ? <EditPickForm
+                key={p.id}
+                pick={p}
+                onCancel={() => setEditingId(null)}
+                onSaved={() => { setEditingId(null); refetch?.(); }}
+              />
+            : <PickHistoryRow key={p.id} pick={p} onEdit={() => setEditingId(p.id)} />
+        ))}
       </div>
     </div>
   );
 }
 
-function PickHistoryRow({ pick }) {
-  const map = { win: 'W', loss: 'L', push: 'P', void: 'V', pending: '·' };
+// What a capper is still allowed to change, mirroring the PATCH /picks/:id rules.
+// 'full'   — unsettled and the game hasn't started: everything is editable
+// 'vip'    — unsettled but the game is under way: VIP visibility only
+// 'locked' — settled: immutable
+//
+// Settled means a result OR a grading timestamp, matching the server's check —
+// this tab only ever lists the signed-in capper's own picks, so ownership (the
+// server's other rule) is already implicit here.
+function editScope(pick) {
+  const settled = (pick.result || 'pending') !== 'pending' || pick.graded_at != null;
+  if (settled) return 'locked';
+  return new Date(pick.game_start_at).getTime() <= Date.now() ? 'vip' : 'full';
+}
+
+function pickLabel(pick) {
+  const d = pick.pick_details || {};
+  return d.text || d.pick || d.selection || pick.bet_type.toUpperCase();
+}
+
+function PickHistoryRow({ pick, onEdit }) {
   const result = pick.result || 'pending';
   const cls = result === 'win' ? 'result-w' : result === 'loss' ? 'result-l' : 'result-p';
   const txt = result === 'pending' ? 'Live' : result.charAt(0).toUpperCase() + result.slice(1);
@@ -217,24 +246,196 @@ function PickHistoryRow({ pick }) {
     ? `${pick.units}U risked`
     : (pick.units_result > 0 ? '+' : '') + pick.units_result.toFixed(2) + 'U';
 
-  const details = pick.pick_details || {};
-  const pickText = details.text || details.pick || details.selection || `${pick.bet_type.toUpperCase()}`;
   const odds = pick.odds > 0 ? `+${pick.odds}` : `${pick.odds}`;
   const created = pick.created_at ? new Date(pick.created_at).toLocaleString() : '—';
+  const scope = editScope(pick);
 
   return (
     <div className="ph-item">
       <div className={`result-pill ${cls}`}>{txt}</div>
       <div>
-        <div className="ph-pick">{pickText}</div>
+        <div className="ph-pick">
+          {pickLabel(pick)}
+          {pick.is_vip_only && <span className="ph-vip-tag">VIP</span>}
+        </div>
         <div className="ph-meta">{pick.sport} · {odds} · {created}</div>
       </div>
       <div className="ph-units">
         <div className={`ph-units-val ${unitCls}`}>{unitStr}</div>
       </div>
-      <div className="ph-buyers">{map[result]}</div>
+      <div className="ph-actions">
+        {scope === 'locked'
+          ? <span className="ph-lock-note" title="Graded picks can't be changed">Graded</span>
+          : <button type="button" className="btn btn-ghost btn-sm" onClick={onEdit}>Edit</button>}
+      </div>
     </div>
   );
+}
+
+const EDITABLE_SPORTS = ['NFL', 'NBA', 'MLB', 'NHL', 'Soccer', 'NCAAF', 'NCAAB', 'MMA'];
+
+function EditPickForm({ pick, onCancel, onSaved }) {
+  const scope = editScope(pick);
+  const wagerLocked = scope !== 'full';
+  const details = pick.pick_details || {};
+
+  const [form, setForm] = useState({
+    sport:         pick.sport || '',
+    bet_type:      pick.bet_type,
+    game_id:       pick.game_id || '',
+    pick_text:     pickLabel(pick),
+    analysis:      details.analysis || '',
+    odds:          String(pick.odds),
+    units:         String(pick.units),
+    is_vip_only:   !!pick.is_vip_only,
+    game_start_at: toLocalInput(pick.game_start_at)
+  });
+  const [status, setStatus] = useState({ state: 'idle' });
+  const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
+
+  // Build a patch of only what changed. The API rejects an empty body, and for a
+  // started game it rejects any wager field — so diffing is what keeps a
+  // "just flip VIP off" save from being refused for touching frozen fields.
+  const buildPatch = () => {
+    const patch = {};
+    if (form.is_vip_only !== !!pick.is_vip_only) patch.is_vip_only = form.is_vip_only;
+    if (wagerLocked) return patch;
+
+    if (form.sport !== pick.sport) patch.sport = form.sport;
+    if (form.bet_type !== pick.bet_type) patch.bet_type = form.bet_type;
+    if (form.game_id !== (pick.game_id || '')) patch.game_id = form.game_id;
+
+    const odds = parseInt(form.odds, 10);
+    if (Number.isFinite(odds) && odds !== pick.odds) patch.odds = odds;
+
+    const units = parseFloat(form.units);
+    if (Number.isFinite(units) && units !== Number(pick.units)) patch.units = units;
+
+    // pick_details is replaced wholesale by the API — merge so a live-odds pick
+    // keeps its market/team/book metadata instead of being flattened to text.
+    if (form.pick_text !== pickLabel(pick) || form.analysis !== (details.analysis || '')) {
+      patch.pick_details = { ...details, text: form.pick_text, analysis: form.analysis };
+    }
+
+    const start = form.game_start_at ? new Date(form.game_start_at) : null;
+    if (start && !Number.isNaN(start.getTime())
+        && start.getTime() !== new Date(pick.game_start_at).getTime()) {
+      patch.game_start_at = start.toISOString();
+    }
+    return patch;
+  };
+
+  const save = async e => {
+    e.preventDefault();
+    const patch = buildPatch();
+    if (Object.keys(patch).length === 0) {
+      setStatus({ state: 'error', msg: 'Nothing changed.' });
+      return;
+    }
+    setStatus({ state: 'loading' });
+    try {
+      await api.updatePick(pick.id, patch);
+      onSaved?.();
+    } catch (e) {
+      setStatus({ state: 'error', msg: e.message });
+    }
+  };
+
+  return (
+    <form className="ph-edit" onSubmit={save}>
+      <div className="ph-edit-head">
+        <span>Editing pick</span>
+        <span className="ph-meta">Submitted {pick.created_at ? new Date(pick.created_at).toLocaleString() : '—'}</span>
+      </div>
+
+      {wagerLocked && (
+        <div className="ph-edit-note">
+          This game has already started, so the wager is locked in. You can still change
+          who gets to see the pick.
+        </div>
+      )}
+
+      {!wagerLocked && (
+        <>
+          <div className="form-row">
+            <div className="form-field">
+              <label className="field-label">Sport</label>
+              <select className="field-input" value={form.sport} onChange={e => set('sport', e.target.value)}>
+                {(EDITABLE_SPORTS.includes(form.sport) ? EDITABLE_SPORTS : [form.sport, ...EDITABLE_SPORTS])
+                  .map(s => <option key={s} value={s}>{s}</option>)}
+              </select>
+            </div>
+            <div className="form-field">
+              <label className="field-label">Bet type</label>
+              <select className="field-input" value={form.bet_type} onChange={e => set('bet_type', e.target.value)}>
+                <option value="prop">Player prop</option>
+                <option value="parlay">Parlay</option>
+                <option value="spread">Spread</option>
+                <option value="moneyline">Moneyline</option>
+                <option value="total">Total (O/U)</option>
+              </select>
+            </div>
+          </div>
+
+          <div className="form-field">
+            <label className="field-label">Your pick</label>
+            <input type="text" className="field-input" value={form.pick_text} onChange={e => set('pick_text', e.target.value)} required />
+          </div>
+
+          <div className="form-row">
+            <div className="form-field">
+              <label className="field-label">Odds (American)</label>
+              <input type="number" className="field-input" value={form.odds} onChange={e => set('odds', e.target.value)} required />
+            </div>
+            <div className="form-field">
+              <label className="field-label">Units (0.5 – 100)</label>
+              <input type="number" step="0.5" min="0.5" max="100" className="field-input" value={form.units} onChange={e => set('units', e.target.value)} required />
+            </div>
+          </div>
+
+          <div className="form-row">
+            <div className="form-field">
+              <label className="field-label">Game start time</label>
+              <input type="datetime-local" className="field-input" value={form.game_start_at} onChange={e => set('game_start_at', e.target.value)} required />
+            </div>
+            <div className="form-field">
+              <label className="field-label">Game ID / matchup tag</label>
+              <input type="text" className="field-input" value={form.game_id} onChange={e => set('game_id', e.target.value)} />
+            </div>
+          </div>
+
+          <div className="form-field">
+            <label className="field-label">Analysis (optional)</label>
+            <textarea className="field-input" style={{ minHeight: 70, resize: 'vertical' }} value={form.analysis} onChange={e => set('analysis', e.target.value)} />
+          </div>
+        </>
+      )}
+
+      <div className="form-field">
+        <label style={{ fontSize: 13, color: 'var(--text-2)', display: 'flex', gap: 8, alignItems: 'center', cursor: 'pointer' }}>
+          <input type="checkbox" checked={form.is_vip_only} onChange={e => set('is_vip_only', e.target.checked)} />
+          VIP only (paid)
+        </label>
+      </div>
+
+      <StatusLine status={status} />
+      <div className="ph-edit-foot">
+        <button type="button" className="btn btn-ghost btn-sm" onClick={onCancel}>Cancel</button>
+        <button type="submit" className="btn btn-white btn-sm" disabled={status.state === 'loading'}>
+          {status.state === 'loading' ? 'Saving…' : 'Save changes'}
+        </button>
+      </div>
+    </form>
+  );
+}
+
+// datetime-local wants local wall-clock time, not the UTC an ISO string carries.
+function toLocalInput(iso) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '';
+  const pad = n => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
 // Frontend label → The Odds API sport key. MLB is first so it's the default

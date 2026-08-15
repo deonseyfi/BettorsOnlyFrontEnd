@@ -346,7 +346,15 @@ a{text-decoration:none;color:inherit}
 .ph-units-val.pos{color:var(--green)}
 .ph-units-val.neg{color:var(--red)}
 .ph-units-val.neu{color:var(--text-2)}
-.ph-buyers{font-size:12px;color:var(--text-3)}
+.ph-actions{font-size:12px;color:var(--text-3);min-width:64px;text-align:right}
+.ph-lock-note{font-size:11px;color:var(--text-3);text-transform:uppercase;letter-spacing:0.5px}
+.ph-vip-tag{margin-left:8px;padding:2px 6px;border-radius:4px;font-size:10px;font-weight:700;letter-spacing:0.5px;color:var(--b);background:rgba(0,194,255,0.12);border:1px solid rgba(0,194,255,0.3);vertical-align:middle}
+
+/* Inline pick editor — replaces its .ph-item row in place */
+.ph-edit{background:var(--card);border:1px solid var(--b);border-radius:10px;padding:16px 18px}
+.ph-edit-head{display:flex;justify-content:space-between;align-items:baseline;gap:12px;margin-bottom:14px;font-size:13px;font-weight:600;color:#fff}
+.ph-edit-note{font-size:12px;line-height:1.5;color:var(--text-2);background:rgba(245,158,11,0.08);border:1px solid rgba(245,158,11,0.25);border-radius:6px;padding:10px 12px;margin-bottom:14px}
+.ph-edit-foot{display:flex;justify-content:flex-end;gap:8px}
 
 /* Submit Pick */
 .submit-form{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:1.75rem;max-width:600px}
