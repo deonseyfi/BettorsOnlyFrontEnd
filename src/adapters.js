@@ -84,7 +84,13 @@ export function adaptPick(p) {
     posted: p.created_at ? timeAgo(new Date(p.created_at)) : '—',
     buyers: 0,
     isVipOnly: p.is_vip_only,
-    result: p.result
+    result: p.result || 'pending',
+    // A settled pick is readable by anyone — the API stops paywalling it once
+    // it grades, so the UI must stop locking it too (see pickDao.isRevealed).
+    settled: (p.result || 'pending') !== 'pending',
+    units: p.units == null ? null : Number(p.units),
+    unitsResult: p.units_result == null ? null : Number(p.units_result),
+    analysis: details.analysis || ''
   };
 }
 

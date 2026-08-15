@@ -24,6 +24,12 @@ export default function Capper({ capperId, onOpenModal }) {
   const cap = capperRes.data || fallbackCap;
   const picks = picksRes.data || [];
 
+  // The API returns two kinds of pick here: still-live ones (the upsell) and
+  // settled ones, which it no longer paywalls. Split them so the settled ones
+  // can be shown outright instead of sitting behind a Buy button.
+  const livePicks = picks.filter(p => !p.settled);
+  const settledPicks = picks.filter(p => p.settled);
+
   return (
     <div className="page active">
       <div className="inner">
@@ -78,8 +84,11 @@ export default function Capper({ capperId, onOpenModal }) {
         </div>
 
         <div className="section-label">Available picks now</div>
+        {livePicks.length === 0 && (
+          <div className="capper-empty">No live picks right now. Past results are below.</div>
+        )}
         <div className="picks-grid">
-          {picks.map(p => (
+          {livePicks.map(p => (
             <div key={p.id} className="pick-card">
               <div className="pc-header">
                 <div>
@@ -113,7 +122,48 @@ export default function Capper({ capperId, onOpenModal }) {
             </div>
           ))}
         </div>
+
+        <div className="section-label">Past results</div>
+        <div className="capper-past-note">
+          Settled picks are shown in full, free — no purchase needed. Verify the record
+          before you buy anything.
+        </div>
+        {settledPicks.length === 0
+          ? <div className="capper-empty">No settled picks yet.</div>
+          : <div className="pick-history">
+              {settledPicks.map(p => <SettledPickRow key={p.id} pick={p} />)}
+            </div>}
       </div>
+    </div>
+  );
+}
+
+// A settled pick, fully revealed. Mirrors the .ph-item row the capper sees on
+// their own profile, minus the edit affordance.
+function SettledPickRow({ pick }) {
+  const cls = pick.result === 'win' ? 'result-w' : pick.result === 'loss' ? 'result-l' : 'result-p';
+  const label = pick.result.charAt(0).toUpperCase() + pick.result.slice(1);
+  const u = pick.unitsResult;
+  const unitCls = (u ?? 0) > 0 ? 'pos' : (u ?? 0) < 0 ? 'neg' : 'neu';
+  const unitStr = u == null ? '—' : `${u > 0 ? '+' : ''}${u.toFixed(2)}U`;
+
+  return (
+    <div className="ph-item">
+      <div className={`result-pill ${cls}`}>{label}</div>
+      <div>
+        <div className="ph-pick">
+          {pick.pick} ({pick.odds})
+          {pick.isVipOnly && <span className="ph-vip-tag" title="Was a VIP pick — released after settling">WAS VIP</span>}
+        </div>
+        <div className="ph-meta">
+          {pick.sport} · {pick.units != null ? `${pick.units}U risked · ` : ''}{pick.time}
+        </div>
+        {pick.analysis && <div className="ph-analysis">{pick.analysis}</div>}
+      </div>
+      <div className="ph-units">
+        <div className={`ph-units-val ${unitCls}`}>{unitStr}</div>
+      </div>
+      <div className="ph-actions" />
     </div>
   );
 }
