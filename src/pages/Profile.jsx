@@ -454,6 +454,16 @@ const ODDS_SPORTS = [
 
 const MARKET_TO_BET_TYPE = { spreads: 'spread', h2h: 'moneyline', totals: 'total' };
 
+// Parlay pricing. A parlay pays the product of its legs' decimal odds — there's
+// no shortcut in American terms, so convert out and back.
+const americanToDecimal = a => (a > 0 ? 1 + a / 100 : 1 + 100 / Math.abs(a));
+const decimalToAmerican = d => (d >= 2 ? Math.round((d - 1) * 100) : Math.round(-100 / (d - 1)));
+const parlayOdds = legs => decimalToAmerican(legs.reduce((acc, l) => acc * americanToDecimal(l.odds), 1));
+const fmtAmerican = n => (n > 0 ? `+${n}` : `${n}`);
+
+const MAX_PARLAY_LEGS = 6;    // "Parlays must contain 2 to 6 legs" — rules callout above
+const MAX_ABS_ODDS    = 10000; // createPickBody caps odds at ±10000
+
 function SubmitTab({ onSubmitted }) {
   const [mode, setMode] = useState('live');
   return (
@@ -483,6 +493,7 @@ function LivePickForm({ onSubmitted, onSwitchManual }) {
   const [gameId, setGameId] = useState('');
   const [market, setMarket] = useState('h2h');
   const [outcomeName, setOutcomeName] = useState('');
+  const [legs, setLegs] = useState([]);
   const [units, setUnits] = useState('1');
   const [isVip, setIsVip] = useState(false);
   const [analysis, setAnalysis] = useState('');
@@ -501,33 +512,113 @@ function LivePickForm({ onSubmitted, onSwitchManual }) {
   const changeGame  = id => { setGameId(id); setOutcomeName(''); };
   const changeMarket = m => { setMarket(m); setOutcomeName(''); };
 
+  // The selection currently staged in the picker, in the shape a slip leg takes.
+  const draftLeg = game && selectedOutcome && book ? {
+    key:           `${game.id}:${market}:${selectedOutcome.name}`,
+    game_id:       game.id,
+    sport:         ODDS_SPORTS.find(s => s.key === sportKey)?.label || 'Other',
+    market,
+    bet_type:      MARKET_TO_BET_TYPE[market],
+    text:          renderPickText(market, selectedOutcome),
+    team:          selectedOutcome.name,
+    point:         selectedOutcome.point ?? null,
+    odds:          Math.round(selectedOutcome.price),
+    book:          book.key,
+    home_team:     game.home_team,
+    away_team:     game.away_team,
+    commence_time: game.commence_time
+  } : null;
+
+  const addLeg = () => {
+    if (!draftLeg) { setStatus({ state: 'error', msg: 'Pick a game and an outcome first' }); return; }
+    if (legs.length >= MAX_PARLAY_LEGS) {
+      setStatus({ state: 'error', msg: `A parlay can hold at most ${MAX_PARLAY_LEGS} legs` });
+      return;
+    }
+    // Legs from the same game are correlated, and multiplying their odds would
+    // overprice the parlay. Same-game parlays need book-specific pricing we
+    // don't have, so keep one leg per game.
+    if (legs.some(l => l.game_id === draftLeg.game_id)) {
+      setStatus({ state: 'error', msg: 'That game is already in the slip — parlay legs must come from different games.' });
+      return;
+    }
+    setLegs(ls => [...ls, draftLeg]);
+    setGameId('');
+    setOutcomeName('');
+    setStatus({ state: 'idle' });
+  };
+
+  const removeLeg = key => setLegs(ls => ls.filter(l => l.key !== key));
+
+  // Anything staged in the picker counts as a leg, so a single pick still
+  // submits in one click and a half-added leg is never silently dropped.
+  const slip = draftLeg && !legs.some(l => l.game_id === draftLeg.game_id)
+    ? [...legs, draftLeg]
+    : legs;
+
   const submit = async e => {
     e.preventDefault();
-    if (!game || !selectedOutcome) { setStatus({ state: 'error', msg: 'Pick a game and an outcome' }); return; }
+    if (slip.length === 0) { setStatus({ state: 'error', msg: 'Pick a game and an outcome' }); return; }
+    if (slip.length > MAX_PARLAY_LEGS) {
+      setStatus({ state: 'error', msg: `A parlay can hold at most ${MAX_PARLAY_LEGS} legs` });
+      return;
+    }
+
+    const isParlay = slip.length > 1;
+    const odds = isParlay ? parlayOdds(slip) : slip[0].odds;
+    if (Math.abs(odds) > MAX_ABS_ODDS) {
+      setStatus({ state: 'error', msg: `That parlay prices at ${fmtAmerican(odds)}, past the ${fmtAmerican(MAX_ABS_ODDS)} limit. Drop a leg.` });
+      return;
+    }
+
     setStatus({ state: 'loading' });
     try {
-      const sportName = ODDS_SPORTS.find(s => s.key === sportKey)?.label || 'Other';
-      const pickText = renderPickText(market, selectedOutcome);
-      await api.createPick({
-        sport: sportName,
-        game_id: game.id,
-        bet_type: MARKET_TO_BET_TYPE[market],
-        odds: Math.round(selectedOutcome.price),
-        units: parseFloat(units),
-        is_vip_only: isVip,
-        pick_details: {
-          text: pickText,
-          market,
-          team: selectedOutcome.name,
-          point: selectedOutcome.point ?? null,
-          book: book.key,
-          home_team: game.home_team,
-          away_team: game.away_team,
-          analysis
-        },
-        game_start_at: game.commence_time
-      });
-      setStatus({ state: 'success', msg: 'Pick submitted.' });
+      let body;
+      if (isParlay) {
+        const sports = [...new Set(slip.map(l => l.sport))];
+        body = {
+          sport:   sports.length === 1 ? sports[0] : 'Multi',
+          // picks.game_id is a single not-null column and a parlay spans several
+          // games — the real per-leg ids live in pick_details.legs.
+          game_id: `parlay_${Date.now()}`,
+          bet_type: 'parlay',
+          odds,
+          units: parseFloat(units),
+          is_vip_only: isVip,
+          pick_details: {
+            text: `${slip.length}-leg parlay: ${slip.map(l => l.text).join(' + ')}`,
+            legs: slip.map(({ key, ...leg }) => leg),
+            analysis
+          },
+          // The slip is locked once the FIRST leg kicks off, not the last.
+          game_start_at: slip.map(l => l.commence_time).sort()[0]
+        };
+      } else {
+        const l = slip[0];
+        body = {
+          sport: l.sport,
+          game_id: l.game_id,
+          bet_type: l.bet_type,
+          odds: l.odds,
+          units: parseFloat(units),
+          is_vip_only: isVip,
+          pick_details: {
+            text: l.text,
+            market: l.market,
+            team: l.team,
+            point: l.point,
+            book: l.book,
+            home_team: l.home_team,
+            away_team: l.away_team,
+            analysis
+          },
+          game_start_at: l.commence_time
+        };
+      }
+      await api.createPick(body);
+      setStatus({ state: 'success', msg: isParlay ? `${slip.length}-leg parlay submitted.` : 'Pick submitted.' });
+      setLegs([]);
+      setGameId('');
       setOutcomeName('');
       setAnalysis('');
       onSubmitted?.();
@@ -617,6 +708,55 @@ function LivePickForm({ onSubmitted, onSwitchManual }) {
           {book && outcomes.length > 0 && (
             <div style={{ fontSize: 11, color: 'var(--text-3)', marginTop: 6 }}>Odds from {book.title}</div>
           )}
+          {outcomes.length > 0 && (
+            <button
+              type="button"
+              className="btn btn-ghost btn-sm"
+              style={{ width: '100%', marginTop: 8 }}
+              onClick={addLeg}
+              disabled={!selectedOutcome || legs.length >= MAX_PARLAY_LEGS}
+            >
+              + Add leg{legs.length > 0 ? ` (${legs.length} in slip)` : ' — build a parlay'}
+            </button>
+          )}
+        </div>
+      )}
+
+      {legs.length > 0 && (
+        <div className="form-field">
+          <label className="field-label">
+            Parlay slip ({legs.length}/{MAX_PARLAY_LEGS})
+            {legs.length > 1 && <> · pays <strong style={{ color: 'var(--b)' }}>{fmtAmerican(parlayOdds(legs))}</strong></>}
+          </label>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            {legs.map((l, i) => (
+              <div
+                key={l.key}
+                style={{
+                  display: 'flex', alignItems: 'center', gap: 10,
+                  padding: '10px 14px', borderRadius: 8,
+                  background: 'var(--bg-2)', border: '1px solid var(--border)'
+                }}
+              >
+                <span style={{ fontSize: 12, color: 'var(--text-3)', fontVariantNumeric: 'tabular-nums' }}>{i + 1}</span>
+                <span style={{ flex: 1, fontSize: 14, color: '#fff', fontWeight: 500 }}>{l.text}</span>
+                <span style={{ fontSize: 13, color: 'var(--text-2)', fontVariantNumeric: 'tabular-nums' }}>{fmtAmerican(l.odds)}</span>
+                <button
+                  type="button"
+                  onClick={() => removeLeg(l.key)}
+                  title="Remove leg"
+                  style={{ background: 'none', border: 'none', color: 'var(--text-3)', cursor: 'pointer', fontSize: 18, lineHeight: 1, padding: '0 2px' }}
+                >
+                  x
+                </button>
+              </div>
+            ))}
+          </div>
+          {legs.length === 1 && (
+            <div style={{ fontSize: 11, color: 'var(--text-3)', marginTop: 6 }}>
+              One leg submits as a single pick. Add another to make it a parlay.
+            </div>
+          )}
         </div>
       )}
 
@@ -640,13 +780,15 @@ function LivePickForm({ onSubmitted, onSwitchManual }) {
 
       <div style={{ marginBottom: 10, textAlign: 'right' }}>
         <a onClick={onSwitchManual} style={{ fontSize: 12, color: 'var(--b)', cursor: 'pointer' }}>
-          Props / parlays / other game → enter manually
+          Props / other game → enter manually
         </a>
       </div>
 
       <StatusLine status={status} />
-      <button type="submit" className="btn btn-white btn-lg" style={{ width: '100%' }} disabled={status.state === 'loading' || !selectedOutcome}>
-        {status.state === 'loading' ? 'Submitting…' : 'Submit Pick'}
+      <button type="submit" className="btn btn-white btn-lg" style={{ width: '100%' }} disabled={status.state === 'loading' || slip.length === 0}>
+        {status.state === 'loading'
+          ? 'Submitting…'
+          : slip.length > 1 ? `Submit ${slip.length}-leg parlay (${fmtAmerican(parlayOdds(slip))})` : 'Submit Pick'}
       </button>
     </form>
   );
