@@ -494,6 +494,7 @@ function LivePickForm({ onSubmitted, onSwitchManual }) {
   const [market, setMarket] = useState('h2h');
   const [outcomeName, setOutcomeName] = useState('');
   const [legs, setLegs] = useState([]);
+  const [betMode, setBetMode] = useState('single');
   const [units, setUnits] = useState('1');
   const [isVip, setIsVip] = useState(false);
   const [analysis, setAnalysis] = useState('');
@@ -550,6 +551,12 @@ function LivePickForm({ onSubmitted, onSwitchManual }) {
 
   const removeLeg = key => setLegs(ls => ls.filter(l => l.key !== key));
 
+  const changeBetMode = m => {
+    setBetMode(m);
+    if (m === 'single') setLegs([]);   // a single bet has no slip to keep
+    setStatus({ state: 'idle' });
+  };
+
   // Anything staged in the picker counts as a leg, so a single pick still
   // submits in one click and a half-added leg is never silently dropped.
   const slip = draftLeg && !legs.some(l => l.game_id === draftLeg.game_id)
@@ -559,6 +566,10 @@ function LivePickForm({ onSubmitted, onSwitchManual }) {
   const submit = async e => {
     e.preventDefault();
     if (slip.length === 0) { setStatus({ state: 'error', msg: 'Pick a game and an outcome' }); return; }
+    if (betMode === 'parlay' && slip.length < 2) {
+      setStatus({ state: 'error', msg: 'A parlay needs at least 2 legs — add another bet, or switch to Single bet.' });
+      return;
+    }
     if (slip.length > MAX_PARLAY_LEGS) {
       setStatus({ state: 'error', msg: `A parlay can hold at most ${MAX_PARLAY_LEGS} legs` });
       return;
@@ -629,6 +640,26 @@ function LivePickForm({ onSubmitted, onSwitchManual }) {
 
   return (
     <form className="submit-form" onSubmit={submit}>
+      <div className="form-field">
+        <label className="field-label">What are you submitting?</label>
+        <div style={{ display: 'flex', gap: 4 }}>
+          {[
+            { k: 'single', label: 'Single bet' },
+            { k: 'parlay', label: `Parlay (2–${MAX_PARLAY_LEGS} legs)` }
+          ].map(m => (
+            <button
+              key={m.k}
+              type="button"
+              className={`chip ${betMode === m.k ? 'active' : ''}`}
+              onClick={() => changeBetMode(m.k)}
+              style={{ flex: 1 }}
+            >
+              {m.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
       <div className="form-row">
         <div className="form-field">
           <label className="field-label">Sport</label>
@@ -708,7 +739,7 @@ function LivePickForm({ onSubmitted, onSwitchManual }) {
           {book && outcomes.length > 0 && (
             <div style={{ fontSize: 11, color: 'var(--text-3)', marginTop: 6 }}>Odds from {book.title}</div>
           )}
-          {outcomes.length > 0 && (
+          {outcomes.length > 0 && betMode === 'parlay' && (
             <button
               type="button"
               className="btn btn-ghost btn-sm"
@@ -716,13 +747,13 @@ function LivePickForm({ onSubmitted, onSwitchManual }) {
               onClick={addLeg}
               disabled={!selectedOutcome || legs.length >= MAX_PARLAY_LEGS}
             >
-              + Add leg{legs.length > 0 ? ` (${legs.length} in slip)` : ' — build a parlay'}
+              + Add leg{legs.length > 0 ? ` (${legs.length} in slip)` : ''}
             </button>
           )}
         </div>
       )}
 
-      {legs.length > 0 && (
+      {betMode === 'parlay' && (
         <div className="form-field">
           <label className="field-label">
             Parlay slip ({legs.length}/{MAX_PARLAY_LEGS})
@@ -752,9 +783,19 @@ function LivePickForm({ onSubmitted, onSwitchManual }) {
               </div>
             ))}
           </div>
+          {legs.length === 0 && (
+            <div style={{
+              padding: '14px', borderRadius: 8, textAlign: 'center',
+              background: 'var(--bg-2)', border: '1px dashed var(--border)',
+              fontSize: 12, color: 'var(--text-3)', lineHeight: 1.5
+            }}>
+              No legs yet. Choose a game and an outcome below, then tap <strong>+ Add leg</strong>.
+              Repeat for each bet you want in the parlay.
+            </div>
+          )}
           {legs.length === 1 && (
             <div style={{ fontSize: 11, color: 'var(--text-3)', marginTop: 6 }}>
-              One leg submits as a single pick. Add another to make it a parlay.
+              A parlay needs at least 2 legs. Add one more.
             </div>
           )}
         </div>
